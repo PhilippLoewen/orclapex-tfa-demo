@@ -1,5 +1,4 @@
-create or replace package body pkg_tfa_apex
-as
+CREATE OR REPLACE PACKAGE BODY pkg_tfa_apex AS
   /**
    * TODO_Comments
    *
@@ -15,18 +14,6 @@ as
    * @return TODO
    */
   --
-  function f_hash_password(
-    p_password varchar2
-  ) return varchar2
-  as
-  begin
-    return
-      oos_util_crypto.hash_str(
-        p_src => p_password
-        , p_typ => oos_util_crypto.gc_hash_sh256
-      )
-    ;
-  end f_hash_password;
 
   /**
    * TODO_Comments
@@ -43,55 +30,26 @@ as
    * @return TODO
    */
   --
-  procedure p_register_user(
-    p_username in varchar2
-    , p_password in varchar2
-    , p_confirm_password in varchar2
-  )
-  as
-    l_shared_secret tfa_user.shared_secret%type;
-    l_password_hash tfa_user.password_hash%type;
-    l_num_results pls_integer := -1;
 
-    illegal_arguments_error exception;
-  begin
-    if
-        p_username is null
-        or p_password is null
-        or p_password != p_confirm_password
-    then
-      raise illegal_arguments_error;
-    end if;
+    PROCEDURE p_register_user (
+        p_username           IN                   VARCHAR2,
+        p_password           IN                   VARCHAR2,
+        p_confirm_password   IN                   VARCHAR2
+    ) AS
+        illegal_arguments_error EXCEPTION;
+        login_failed EXCEPTION;
+    BEGIN
+        IF p_username IS NULL OR p_password IS NULL OR p_password != p_confirm_password THEN
+            RAISE illegal_arguments_error;
+        END IF;
 
-    l_password_hash := f_hash_password(p_password => p_password);
+        apex_util.create_user(p_user_name => p_username, p_web_password => p_password, p_change_password_on_first_use => 'N');
 
-    while l_num_results != 0
-    loop
-      l_shared_secret := oos_util_totp.generate_secret;
-
-      select count(1)
-      into l_num_results
-      from tfa_user
-      where shared_secret = l_shared_secret;
-    end loop;
-
-    insert into tfa_user
-    (
-      username
-      , password_hash
-      , shared_secret
-    )
-    values
-    (
-      p_username
-      , l_password_hash
-      , l_shared_secret
-    );
-  exception
-    when others then
+    EXCEPTION
+        WHEN OTHERS THEN
       -- error handling
-      raise;
-  end p_register_user;
+            RAISE;
+    END p_register_user;
 
   /**
    * TODO_Comments
@@ -108,48 +66,75 @@ as
    * @return TODO
    */
   --
-  procedure p_authenticate_user(
-    p_username in varchar2
-    , p_password in varchar2
-  )
-  as
-    l_password_hash tfa_user.password_hash%type;
-    l_tfa_enabled tfa_user.tfa_enabled%type;
 
-    login_failed exception;
-  begin
-    begin
-      select password_hash, tfa_enabled
-      into l_password_hash, l_tfa_enabled
-      from tfa_user
-      where 1 = 1
-        and lower(username) = lower(p_username)
-        and coalesce(expiry_date, sysdate) >= sysdate
-        and active = 1
-      ;
-    exception
-      when no_data_found then
-        raise login_failed;
-    end;
 
-    if l_password_hash = f_hash_password(p_password => p_password) then
-      if l_tfa_enabled = 0 then
-        apex_authentication.post_login(
-          p_username => p_username
-          , p_password => null
+    FUNCTION f_enable_otp (
+        p_username IN VARCHAR2
+    ) RETURN VARCHAR2 IS
+        l_num_results     PLS_INTEGER := -1;
+        l_shared_secret   tfa_configs.shared_secret%TYPE;
+    BEGIN
+        WHILE l_num_results != 0 LOOP
+            l_shared_secret := oos_util_totp.generate_secret;
+            SELECT
+                COUNT(1)
+            INTO l_num_results
+            FROM
+                tfa_configs
+            WHERE
+                shared_secret = l_shared_secret;
+
+        END LOOP;
+
+        INSERT INTO tfa_configs (
+            username,
+            shared_secret
+        ) VALUES (
+            p_username,
+            l_shared_secret
         );
-        apex_util.clear_page_cache();
-      end if;
-    else
-      raise login_failed;
-    end if;
-  exception
-    when login_failed then
-      apex_authentication.login(
-        p_username => p_username
-        , p_password => null
-      );
-  end p_authenticate_user;
+
+        RETURN l_shared_secret;
+    END f_enable_otp;
+
+    PROCEDURE p_authenticate_user (
+        p_username   IN           VARCHAR2,
+        p_password   IN           VARCHAR2
+    ) AS
+        l_tfa_enabled   NUMBER;
+        login_failed EXCEPTION;
+        l_username      tfa_configs.username%TYPE := upper(p_username);
+    BEGIN
+        BEGIN
+            SELECT
+                COUNT(*)
+            INTO l_tfa_enabled
+            FROM
+                tfa_configs tc
+            WHERE
+                tc.username = l_username;
+
+        EXCEPTION
+            WHEN no_data_found THEN
+                RAISE login_failed;
+        END;
+
+        IF apex_util.is_login_password_valid(p_username => l_username, p_password => p_password) THEN
+            IF l_tfa_enabled = 0 THEN
+                apex_authentication.post_login(p_username => l_username, p_password => p_password);
+                apex_util.clear_page_cache();
+            END IF;
+
+        ELSE
+            RAISE login_failed;
+        END IF;
+
+    EXCEPTION
+        WHEN login_failed THEN
+            apex_authentication.login(p_username => l_username, p_password => NULL);
+    END p_authenticate_user;
+
+
 
   /**
    * TODO_Comments
@@ -166,101 +151,80 @@ as
    * @return TODO
    */
   --
-  function f_authenticate_user(
-    p_username in varchar2
-    , p_password in varchar2
-  ) return boolean
-  as
-    l_password_hash tfa_user.password_hash%type;
-  begin
-    select password_hash
-    into l_password_hash
-    from tfa_user
-    where 1 = 1
-      and lower(username) = lower(p_username)
-      and coalesce(expiry_date, sysdate) >= sysdate
-      and active = 1
-    ;
 
-    return l_password_hash = f_hash_password(p_password => p_password);
-  exception
-    when no_data_found then
-      return false;
-  end f_authenticate_user;
+    FUNCTION f_validate_otp (
+        p_username   IN           tfa_configs.username%TYPE,
+        p_otp        IN           NUMBER
+    ) RETURN BOOLEAN AS
 
-  /**
-   * TODO_Comments
-   *
-   * Notes:
-   *  -
-   *
-   * Related Tickets:
-   *  -
-   *
-   * @author TODO
-   * @created TODO
-   * @param TODO
-   * @return TODO
-   */
-  --
-  function f_validate_otp(
-    p_userid in tfa_user.userid%type
-    , p_otp in number
-  ) return boolean
-  as
-    l_shared_secret tfa_user.shared_secret%type;
-  begin
-    select shared_secret
-    into l_shared_secret
-    from tfa_user
-    where 1 = 1
-      and userid = p_userid
-      and coalesce(expiry_date, sysdate) >= sysdate
-      and active = 1
-    ;
+        l_shared_secret   tfa_configs.shared_secret%TYPE;
+        l_username        tfa_configs.username%TYPE := upper(p_username);
+        l_is_valid        BOOLEAN := false;
+        l_count           NUMBER;
+        l_tfa_code_row    tfa_codes%rowtype;
+    BEGIN
+        SELECT
+            shared_secret
+        INTO l_shared_secret
+        FROM
+            tfa_configs
+        WHERE
+            1 = 1
+            AND username = l_username;
 
-    return
-      oos_util_totp.validate_otp(
-        p_secret => l_shared_secret
-        , p_otp => p_otp
-      ) = 1
-    ;
-  exception
-    when no_data_found then
-      return false;
-  end f_validate_otp;
+        l_is_valid := oos_util_totp.validate_otp(p_secret => l_shared_secret, p_otp => p_otp) = 1;
 
-  /**
-   * TODO_Comments
-   *
-   * Notes:
-   *  -
-   *
-   * Related Tickets:
-   *  -
-   *
-   * @author TODO
-   * @created TODO
-   * @param TODO
-   * @return TODO
-   */
-  --
-  function f_validate_otp(
-    p_username in tfa_user.username%type
-    , p_otp in number
-  ) return boolean
-  as
-    l_userid tfa_user.userid%type;
-  begin
-    select userid
-    into l_userid
-    from tfa_user
-    where lower(username) = lower(p_username);
+        BEGIN
+            SELECT
+                *
+            INTO l_tfa_code_row
+            FROM
+                tfa_codes tc
+            WHERE
+                tc.username = l_username
+                AND tc.otp_code = p_otp;
 
-    return f_validate_otp(p_userid => l_userid, p_otp => p_otp);
-  exception
-    when no_data_found then
-      return false;
-  end f_validate_otp;
-end pkg_tfa_apex;
+        EXCEPTION
+            WHEN OTHERS THEN
+                NULL;
+        END;
+
+        IF l_tfa_code_row.username IS NOT NULL THEN
+            IF l_tfa_code_row.used = 'N' THEN
+                UPDATE tfa_codes tc
+                SET
+                    tc.used = 'Y',
+                    tc.used_date = SYSDATE
+                WHERE
+                    tc.username = l_username
+                    AND tc.otp_code = p_otp;
+
+                l_is_valid := true;
+            ELSE
+                l_is_valid := false;
+            END IF;
+        ELSE
+            INSERT INTO tfa_codes tc (
+                username,
+                otp_code,
+                type,
+                used,
+                used_date
+            ) VALUES (
+                l_username,
+                p_otp,
+                'TOTP',
+                'Y',
+                SYSDATE
+            );
+
+        END IF;
+
+        RETURN l_is_valid;
+    EXCEPTION
+        WHEN no_data_found THEN
+            RETURN false;
+    END f_validate_otp;
+
+END pkg_tfa_apex;
 /

@@ -1,5 +1,4 @@
-create or replace package pkg_tfa_apex
-as
+CREATE OR REPLACE PACKAGE pkg_tfa_apex AS
   /**
   * TODO_Comments
   *
@@ -15,11 +14,15 @@ as
   * @return TODO
   */
   --
-  procedure p_register_user(
-    p_username in varchar2
-    , p_password in varchar2
-    , p_confirm_password in varchar2
-  );
+    PROCEDURE p_register_user (
+        p_username           IN                   VARCHAR2,
+        p_password           IN                   VARCHAR2,
+        p_confirm_password   IN                   VARCHAR2
+    );
+
+    FUNCTION f_enable_otp (
+        p_username IN VARCHAR2
+    ) RETURN VARCHAR2;
 
   /**
   * TODO_Comments
@@ -36,10 +39,11 @@ as
   * @return TODO
   */
   --
-  procedure p_authenticate_user(
-    p_username in varchar2
-    , p_password in varchar2
-  );
+
+    PROCEDURE p_authenticate_user (
+        p_username   IN           VARCHAR2,
+        p_password   IN           VARCHAR2
+    );
 
   /**
    * TODO_Comments
@@ -56,50 +60,11 @@ as
    * @return TODO
    */
   --
-  function f_authenticate_user(
-    p_username in varchar2
-    , p_password in varchar2
-  ) return boolean;
 
-  /**
-   * TODO_Comments
-   *
-   * Notes:
-   *  -
-   *
-   * Related Tickets:
-   *  -
-   *
-   * @author TODO
-   * @created TODO
-   * @param TODO
-   * @return TODO
-   */
-  --
-  function f_validate_otp(
-    p_userid in tfa_user.userid%type
-    , p_otp in number
-  ) return boolean;
+    FUNCTION f_validate_otp (
+        p_username   IN           tfa_configs.username%TYPE,
+        p_otp        IN           NUMBER
+    ) RETURN BOOLEAN;
 
-  /**
-   * TODO_Comments
-   *
-   * Notes:
-   *  -
-   *
-   * Related Tickets:
-   *  -
-   *
-   * @author TODO
-   * @created TODO
-   * @param TODO
-   * @return TODO
-   */
-  --
-  function f_validate_otp(
-    p_username in tfa_user.username%type
-    , p_otp in number
-  ) return boolean;
-
-end pkg_tfa_apex;
+END pkg_tfa_apex;
 /
